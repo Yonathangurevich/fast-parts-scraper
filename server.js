@@ -11,7 +11,7 @@ const browserPool = [];
 const MAX_BROWSERS = 2;
 let initComplete = false;
 
-// MORE AGGRESSIVE browser args for Cloudflare bypass
+// Browser args optimized for Railway
 const BROWSER_ARGS = [
     '--no-sandbox',
     '--disable-setuid-sandbox',
@@ -22,8 +22,11 @@ const BROWSER_ARGS = [
     '--disable-gpu',
     '--no-first-run',
     '--window-size=1920,1080',
-    '--start-maximized',
-    '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+    '--disable-features=TranslateUI',
+    '--disable-ipc-flooding-protection'
 ];
 
 // Initialize browser pool
@@ -33,10 +36,10 @@ async function initBrowserPool() {
     for (let i = 0; i < MAX_BROWSERS; i++) {
         try {
             const browser = await puppeteer.launch({
-                headless: false, // TRY WITH headless: false - sometimes helps with Cloudflare!
+                headless: 'new', // MUST be 'new' for Railway!
                 args: BROWSER_ARGS,
                 ignoreDefaultArgs: ['--enable-automation'],
-                defaultViewport: null
+                executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || puppeteer.executablePath()
             });
             
             browserPool.push({ 
@@ -67,8 +70,11 @@ async function getBrowser() {
         return getBrowser();
     }
     
-    browserObj.busy = true;
-    browserObj.lastUsed = Date.now();
+    if (browserObj) {
+        browserObj.busy = true;
+        browserObj.lastUsed = Date.now();
+    }
+    
     return browserObj;
 }
 
@@ -79,7 +85,7 @@ function releaseBrowser(browserObj) {
     }
 }
 
-// AGGRESSIVE Cloudflare bypass function
+// Scraping function with Cloudflare bypass
 async function scrapeParts(url, options = {}) {
     const startTime = Date.now();
     let browserObj = null;
@@ -89,89 +95,56 @@ async function scrapeParts(url, options = {}) {
         console.log(`🔧 Scraping: ${url.substring(0, 80)}...`);
         
         browserObj = await getBrowser();
-        const context = await browserObj.browser.createIncognitoBrowserContext();
-        page = await context.newPage();
+        if (!browserObj) {
+            throw new Error('No browser available');
+        }
         
-        // CRITICAL: Advanced stealth settings
+        page = await browserObj.browser.newPage();
+        
+        // Set viewport
+        await page.setViewport({ width: 1920, height: 1080 });
+        
+        // Set user agent
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        
+        // Advanced stealth
         await page.evaluateOnNewDocument(() => {
-            // Remove webdriver
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined
             });
             
-            // Add chrome object
             window.chrome = {
                 runtime: {},
                 loadTimes: function() {},
                 csi: function() {},
-                app: {
-                    isInstalled: false,
-                }
+                app: {}
             };
             
-            // Fix permissions
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1,2,3,4,5]
+            });
+            
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en']
+            });
+            
             const originalQuery = window.navigator.permissions.query;
             window.navigator.permissions.query = (parameters) => (
                 parameters.name === 'notifications' ?
                     Promise.resolve({ state: Notification.permission }) :
                     originalQuery(parameters)
             );
-            
-            // Spoof plugins
-            Object.defineProperty(navigator, 'plugins', {
-                get: () => [
-                    {
-                        0: {type: "application/x-google-chrome-pdf", suffixes: "pdf"},
-                        description: "Portable Document Format",
-                        filename: "internal-pdf-viewer",
-                        length: 1,
-                        name: "Chrome PDF Plugin"
-                    }
-                ]
-            });
-            
-            // Spoof languages
-            Object.defineProperty(navigator, 'languages', {
-                get: () => ['en-US', 'en']
-            });
-            
-            // Fix chrome runtime
-            Object.defineProperty(navigator, 'hardwareConcurrency', {
-                get: () => 8
-            });
-            
-            // Add WebGL vendor
-            const getParameter = WebGLRenderingContext.prototype.getParameter;
-            WebGLRenderingContext.prototype.getParameter = function(parameter) {
-                if (parameter === 37445) {
-                    return 'Intel Inc.';
-                }
-                if (parameter === 37446) {
-                    return 'Intel Iris OpenGL Engine';
-                }
-                return getParameter(parameter);
-            };
         });
         
-        // Set headers BEFORE navigation
+        // Set headers
         await page.setExtraHTTPHeaders({
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
             'Accept-Encoding': 'gzip, deflate, br',
             'DNT': '1',
             'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0'
+            'Upgrade-Insecure-Requests': '1'
         });
-        
-        // Set cookies if we have them from previous session
-        if (options.cookies && options.cookies.length > 0) {
-            await page.setCookie(...options.cookies);
-        }
         
         // Navigate
         console.log('📍 Navigating...');
@@ -182,65 +155,47 @@ async function scrapeParts(url, options = {}) {
         
         console.log(`📄 Status: ${response.status()}`);
         
-        // Smart Cloudflare detection and waiting
-        let cloudflareDetected = false;
+        // Check for Cloudflare
         let attempts = 0;
-        const maxAttempts = 20; // More attempts
+        const maxAttempts = 15;
         
         while (attempts < maxAttempts) {
             const title = await page.title();
-            const content = await page.content();
             
-            if (title.includes('Just a moment') || 
-                title.includes('Checking') || 
-                content.includes('cf-browser-verification')) {
-                
-                if (!cloudflareDetected) {
-                    console.log('☁️ Cloudflare detected, waiting for challenge...');
-                    cloudflareDetected = true;
-                }
-                
-                // Wait and check
-                await page.waitForTimeout(2000); // Wait 2 seconds between checks
+            if (title.includes('Just a moment') || title.includes('Checking')) {
+                console.log(`⏳ Cloudflare check ${attempts + 1}/${maxAttempts}...`);
+                await page.waitForTimeout(2000);
                 attempts++;
                 
-                if (attempts % 5 === 0) {
-                    console.log(`⏳ Still waiting... ${attempts}/${maxAttempts}`);
-                }
-                
-                // Try to detect if challenge is complete
-                const newUrl = page.url();
-                if (newUrl.includes('/parts') && newUrl.includes('gid=')) {
+                // Check if we got redirected
+                const currentUrl = page.url();
+                if (currentUrl.includes('/parts') && currentUrl.includes('gid=')) {
                     console.log('✅ Redirected to parts page!');
                     break;
                 }
-                
             } else {
                 console.log('✅ Page loaded!');
                 break;
             }
         }
         
-        // Wait a bit more for content to load
+        // Wait for content
         await page.waitForTimeout(2000);
         
-        // Try to wait for parts content
+        // Try to wait for parts
         try {
-            await page.waitForSelector('table, .parts-table, .part-row, [data-part]', { 
-                timeout: 5000 
+            await page.waitForSelector('table, .part-row, [data-part]', { 
+                timeout: 3000 
             });
-            console.log('✅ Parts content found');
+            console.log('✅ Parts found');
         } catch (e) {
-            console.log('⚠️ No parts selector found, but continuing...');
+            console.log('⚠️ No parts selector');
         }
         
-        // Get final content
+        // Get content
         const html = await page.content();
         const finalUrl = page.url();
         const cookies = await page.cookies();
-        
-        // Close context
-        await context.close();
         
         const elapsed = Date.now() - startTime;
         console.log(`✅ Completed in ${elapsed}ms`);
@@ -261,6 +216,9 @@ async function scrapeParts(url, options = {}) {
         };
         
     } finally {
+        if (page) {
+            await page.close().catch(() => {});
+        }
         if (browserObj) {
             releaseBrowser(browserObj);
         }
@@ -272,7 +230,7 @@ app.post('/v1', async (req, res) => {
     const startTime = Date.now();
     
     try {
-        const { cmd, url, maxTimeout = 35000, cookies } = req.body;
+        const { cmd, url, maxTimeout = 35000 } = req.body;
         
         if (!url) {
             return res.status(400).json({
@@ -282,21 +240,18 @@ app.post('/v1', async (req, res) => {
         }
         
         console.log(`\n${'='.repeat(60)}`);
-        console.log(`🔧 Parts Page Request`);
-        console.log(`🔗 URL: ${url.substring(0, 100)}...`);
+        console.log(`🔧 Request: ${url.substring(0, 100)}...`);
         console.log(`${'='.repeat(60)}\n`);
         
         const result = await Promise.race([
-            scrapeParts(url, { cookies }),
+            scrapeParts(url),
             new Promise((_, reject) => 
                 setTimeout(() => reject(new Error('Timeout')), maxTimeout)
             )
         ]);
         
         if (result.success) {
-            const totalElapsed = Date.now() - startTime;
-            
-            console.log(`✅ SUCCESS - Total: ${totalElapsed}ms`);
+            console.log(`✅ SUCCESS - ${Date.now() - startTime}ms`);
             
             res.json({
                 status: 'ok',
@@ -312,7 +267,7 @@ app.post('/v1', async (req, res) => {
                 version: '1.0.0'
             });
         } else {
-            throw new Error(result.error || 'Failed');
+            throw new Error(result.error);
         }
         
     } catch (error) {
