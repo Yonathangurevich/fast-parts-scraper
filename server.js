@@ -6,19 +6,18 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
 
-// SmartProxy Configuration
+// SmartProxy STATIC RESIDENTIAL Configuration (YOUR EXACT SETTINGS!)
 const PROXY_CONFIG = {
-    server: 'gate.smartproxy.com:10000',
-    username: process.env.PROXY_USERNAME || 'byparr',
+    server: 'eu.smartproxy.com',  // EU server
+    port: '3120',                  // Static residential port
+    username: process.env.PROXY_USERNAME || 'smart-byparr_area-IL_city-TELAVIV',  // Full username with smart-
     password: process.env.PROXY_PASSWORD || '1209QWEasdzxcv'
 };
 
-// Browser pool
-const browserPool = [];
-const MAX_BROWSERS = 2;
-let initComplete = false;
+// Build proxy URL
+const PROXY_URL = `http://${PROXY_CONFIG.server}:${PROXY_CONFIG.port}`;
 
-// Optimized browser args
+// Browser args
 const BROWSER_ARGS = [
     '--no-sandbox',
     '--disable-setuid-sandbox',
@@ -27,176 +26,136 @@ const BROWSER_ARGS = [
     '--disable-web-security',
     '--disable-gpu',
     '--window-size=1920,1080',
-    '--disable-images',  // Don't load images
-    '--disable-javascript-harmony-shipping',
-    '--disable-background-networking',
+    '--disable-images',
     '--disable-background-timer-throttling',
-    '--disable-client-side-phishing-detection',
-    '--disable-default-apps',
-    '--disable-extensions',
-    '--disable-hang-monitor',
-    '--disable-popup-blocking',
-    '--disable-prompt-on-repost',
-    '--disable-sync',
-    '--disable-translate',
-    '--disable-domain-reliability',
-    '--disable-features=TranslateUI,BlinkGenPropertyTrees',
-    '--disable-ipc-flooding-protection',
-    '--no-pings'
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+    '--disable-features=TranslateUI',
+    '--disable-ipc-flooding-protection'
 ];
 
-// Initialize browser pool
-async function initBrowserPool() {
-    console.log('🚀 Initializing browsers with proxy...');
-    
-    for (let i = 0; i < MAX_BROWSERS; i++) {
-        try {
-            const browser = await puppeteer.launch({
-                headless: 'new',
-                args: [
-                    ...BROWSER_ARGS,
-                    `--proxy-server=http://${PROXY_CONFIG.server}`
-                ],
-                ignoreDefaultArgs: ['--enable-automation']
-            });
-            
-            browserPool.push({ 
-                browser, 
-                busy: false,
-                lastUsed: Date.now() 
-            });
-            
-            console.log(`✅ Browser ${i + 1} ready`);
-        } catch (error) {
-            console.error(`❌ Failed to init browser ${i + 1}:`, error.message);
-        }
-    }
-    
-    initComplete = true;
-}
-
-// Get available browser
-async function getBrowser() {
-    while (!initComplete) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-    }
-    
-    let browserObj = browserPool.find(b => !b.busy);
-    
-    if (!browserObj && browserPool.length > 0) {
-        await new Promise(resolve => setTimeout(resolve, 500));
-        return getBrowser();
-    }
-    
-    if (browserObj) {
-        browserObj.busy = true;
-        browserObj.lastUsed = Date.now();
-    }
-    
-    return browserObj;
-}
-
-// Release browser
-function releaseBrowser(browserObj) {
-    if (browserObj) {
-        browserObj.busy = false;
-    }
-}
-
-// OPTIMIZED scraping function
+// Main scraping function
 async function scrapeParts(url, options = {}) {
     const startTime = Date.now();
-    let browserObj = null;
+    let browser = null;
     let page = null;
     
     try {
-        console.log(`🔧 Scraping: ${url.substring(0, 80)}...`);
+        console.log(`🔧 Scraping via SmartProxy Static Residential...`);
+        console.log(`🌐 Proxy: ${PROXY_URL}`);
+        console.log(`👤 User: ${PROXY_CONFIG.username}`);
         
-        browserObj = await getBrowser();
-        if (!browserObj) {
-            throw new Error('No browser available');
-        }
+        // Launch browser with proxy
+        browser = await puppeteer.launch({
+            headless: 'new',
+            args: [
+                ...BROWSER_ARGS,
+                `--proxy-server=${PROXY_URL}`  // Just the server URL
+            ],
+            ignoreDefaultArgs: ['--enable-automation']
+        });
         
-        page = await browserObj.browser.newPage();
+        page = await browser.newPage();
         
-        // Authenticate proxy
+        // CRITICAL: Authenticate with FULL credentials
+        console.log('🔐 Authenticating...');
         await page.authenticate({
-            username: PROXY_CONFIG.username,
-            password: PROXY_CONFIG.password
+            username: PROXY_CONFIG.username,  // smart-byparr_area-IL_city-TELAVIV
+            password: PROXY_CONFIG.password   // 1209QWEasdzxcv
         });
-        console.log('🔐 Proxy authenticated');
         
-        // OPTIMIZATION: Block unnecessary resources
-        await page.setRequestInterception(true);
-        page.on('request', (req) => {
-            const resourceType = req.resourceType();
-            const url = req.url();
-            
-            // Block all images, fonts, media
-            if (['image', 'font', 'media', 'texttrack', 'object', 'beacon', 'csp_report', 'imageset'].includes(resourceType)) {
-                req.abort();
-            }
-            // Block analytics
-            else if (url.includes('google-analytics') || 
-                     url.includes('googletagmanager') || 
-                     url.includes('facebook') ||
-                     url.includes('doubleclick') ||
-                     url.includes('analytics')) {
-                req.abort();
-            }
-            // Allow everything else
-            else {
-                req.continue();
-            }
-        });
+        // Test proxy first
+        console.log('🧪 Testing proxy connection...');
+        try {
+            await page.goto('http://ipinfo.io/json', { 
+                timeout: 10000,
+                waitUntil: 'domcontentloaded' 
+            });
+            const ipInfo = await page.evaluate(() => document.body.innerText);
+            const ipData = JSON.parse(ipInfo);
+            console.log('✅ Proxy working! Location:', ipData.city, ipData.country);
+            console.log('📍 IP:', ipData.ip);
+        } catch (proxyError) {
+            console.error('❌ Proxy test failed:', proxyError.message);
+            // Continue anyway - sometimes ipinfo blocks proxies
+        }
         
         // Set viewport and user agent
         await page.setViewport({ width: 1920, height: 1080 });
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
         
-        // Stealth
+        // Block unnecessary resources
+        await page.setRequestInterception(true);
+        page.on('request', (req) => {
+            const resourceType = req.resourceType();
+            if (['image', 'font', 'media', 'stylesheet'].includes(resourceType)) {
+                req.abort();
+            } else {
+                req.continue();
+            }
+        });
+        
+        // Anti-detection
         await page.evaluateOnNewDocument(() => {
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined
             });
-            window.chrome = { runtime: {} };
+            
+            window.chrome = {
+                runtime: {},
+                loadTimes: function() {},
+                csi: function() {}
+            };
+            
             Object.defineProperty(navigator, 'plugins', {
                 get: () => [1,2,3,4,5]
             });
+            
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['he-IL', 'he', 'en-US', 'en']  // Israel locale
+            });
         });
         
-        // Navigate - with shorter timeout
-        console.log('📍 Navigating...');
+        // Navigate to target
+        console.log('📍 Navigating to target...');
         const response = await page.goto(url, {
-            waitUntil: 'domcontentloaded',  // Don't wait for all resources
-            timeout: 20000  // 20 seconds max
+            waitUntil: 'domcontentloaded',
+            timeout: 30000
         });
         
         console.log(`📄 Status: ${response.status()}`);
         
-        // Check for Cloudflare - but don't wait too long
-        let cloudflareChecks = 0;
-        const maxChecks = 5;  // Less checks
+        // If 407, auth failed
+        if (response.status() === 407) {
+            console.error('❌ Proxy authentication failed!');
+            const content = await page.content();
+            console.log('Error page:', content.substring(0, 500));
+        }
         
-        while (cloudflareChecks < maxChecks) {
+        // Handle Cloudflare
+        let attempts = 0;
+        const maxAttempts = 10;
+        
+        while (attempts < maxAttempts) {
             const title = await page.title();
             
             if (title.includes('Just a moment') || title.includes('Checking')) {
-                console.log(`⏳ Cloudflare ${cloudflareChecks + 1}/${maxChecks}...`);
-                await page.waitForTimeout(1500);  // Shorter wait
-                cloudflareChecks++;
+                console.log(`⏳ Cloudflare check ${attempts + 1}/${maxAttempts}...`);
+                await page.waitForTimeout(2000);
+                attempts++;
             } else {
-                console.log('✅ Page ready!');
+                console.log('✅ Page loaded!');
                 break;
             }
         }
         
-        // Quick wait for content
-        await page.waitForTimeout(1000);  // Just 1 second
+        // Wait for content
+        await page.waitForTimeout(2000);
         
-        // Get content immediately
+        // Get content
         const html = await page.content();
         const finalUrl = page.url();
+        const cookies = await page.cookies();
         
         const elapsed = Date.now() - startTime;
         console.log(`✅ Completed in ${elapsed}ms`);
@@ -205,6 +164,7 @@ async function scrapeParts(url, options = {}) {
             success: true,
             html: html,
             url: finalUrl,
+            cookies: cookies,
             elapsed: elapsed
         };
         
@@ -216,21 +176,70 @@ async function scrapeParts(url, options = {}) {
         };
         
     } finally {
-        if (page) {
-            await page.close().catch(() => {});
-        }
-        if (browserObj) {
-            releaseBrowser(browserObj);
-        }
+        if (page) await page.close().catch(() => {});
+        if (browser) await browser.close().catch(() => {});
     }
 }
+
+// Test proxy endpoint
+app.get('/test-proxy', async (req, res) => {
+    console.log('🧪 Testing SmartProxy connection...');
+    
+    let browser = null;
+    let page = null;
+    
+    try {
+        browser = await puppeteer.launch({
+            headless: 'new',
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                `--proxy-server=${PROXY_URL}`
+            ]
+        });
+        
+        page = await browser.newPage();
+        
+        await page.authenticate({
+            username: PROXY_CONFIG.username,
+            password: PROXY_CONFIG.password
+        });
+        
+        await page.goto('http://ipinfo.io/json', { timeout: 15000 });
+        const ipInfo = await page.evaluate(() => JSON.parse(document.body.innerText));
+        
+        console.log('✅ Proxy test successful:', ipInfo);
+        res.json({
+            success: true,
+            proxy: {
+                server: `${PROXY_CONFIG.server}:${PROXY_CONFIG.port}`,
+                username: PROXY_CONFIG.username,
+                location: ipInfo
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Proxy test failed:', error.message);
+        res.json({
+            success: false,
+            error: error.message,
+            config: {
+                server: `${PROXY_CONFIG.server}:${PROXY_CONFIG.port}`,
+                username: PROXY_CONFIG.username
+            }
+        });
+    } finally {
+        if (page) await page.close();
+        if (browser) await browser.close();
+    }
+});
 
 // Main endpoint
 app.post('/v1', async (req, res) => {
     const startTime = Date.now();
     
     try {
-        const { cmd, url, maxTimeout = 25000 } = req.body;  // 25 seconds default
+        const { cmd, url, maxTimeout = 30000 } = req.body;
         
         if (!url) {
             return res.status(400).json({
@@ -260,7 +269,7 @@ app.post('/v1', async (req, res) => {
                     url: result.url,
                     status: 200,
                     response: result.html,
-                    cookies: [],
+                    cookies: result.cookies || [],
                     userAgent: 'Mozilla/5.0'
                 },
                 startTimestamp: startTime,
@@ -284,9 +293,11 @@ app.post('/v1', async (req, res) => {
 app.get('/health', (req, res) => {
     res.json({
         status: 'healthy',
-        proxy: 'SmartProxy active',
-        browsers: browserPool.length,
-        active: browserPool.filter(b => b.busy).length
+        proxy: {
+            type: 'SmartProxy Static Residential',
+            server: `${PROXY_CONFIG.server}:${PROXY_CONFIG.port}`,
+            location: 'Tel Aviv, Israel'
+        }
     });
 });
 
@@ -294,28 +305,29 @@ app.get('/health', (req, res) => {
 app.get('/', (req, res) => {
     res.send(`
         <h1>🔧 Parts Scraper with SmartProxy</h1>
-        <p>Status: Running</p>
-        <p>Performance: ~10-15 seconds per request</p>
+        <p>Type: Static Residential</p>
+        <p>Server: ${PROXY_CONFIG.server}:${PROXY_CONFIG.port}</p>
+        <p>Location: Tel Aviv, Israel</p>
+        <hr>
+        <p><a href="/test-proxy">Test Proxy Connection</a></p>
     `);
 });
 
 // Start
-app.listen(PORT, '0.0.0.0', async () => {
+app.listen(PORT, '0.0.0.0', () => {
     console.log(`
 ╔════════════════════════════════════════╗
 ║  🔧 Parts Scraper v2.0                 ║
-║  Proxy: SmartProxy Residential         ║
-║  Expected: 10-15 seconds per request   ║
+║  Proxy: SmartProxy Static Residential  ║
+║  Server: ${PROXY_CONFIG.server}:${PROXY_CONFIG.port}        ║
+║  Location: Tel Aviv, Israel            ║
 ╚════════════════════════════════════════╝
     `);
-    await initBrowserPool();
     console.log('✅ Ready!');
 });
 
 // Cleanup
 process.on('SIGTERM', async () => {
-    for (const b of browserPool) {
-        await b.browser.close().catch(() => {});
-    }
+    console.log('📛 Shutting down...');
     process.exit(0);
 });
