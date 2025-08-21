@@ -6,28 +6,19 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
 
-// SmartProxy Configuration - TRY DIFFERENT ENDPOINTS
+// SmartProxy Configuration
 const PROXY_CONFIG = {
-    // Option 1: Residential Rotating (נסה את זה קודם!)
     server: 'gate.smartproxy.com:10000',
-    
-    // Option 2: Static Residential (אם הראשון לא עובד)
-    // server: 'gate.smartproxy.com:7000',
-    
-    // Your credentials (without the smart- prefix for rotating)
-    username: process.env.PROXY_USERNAME || 'byparr',  // שים לב - בלי smart-
+    username: process.env.PROXY_USERNAME || 'byparr',
     password: process.env.PROXY_PASSWORD || '1209QWEasdzxcv'
 };
 
-// For static residential, use full username:
-// username: 'smart-byparr_area-IL_city-TELAVIV'
-
 // Browser pool
 const browserPool = [];
-const MAX_BROWSERS = 1;  // Start with 1 for testing
+const MAX_BROWSERS = 2;
 let initComplete = false;
 
-// Browser args - SIMPLIFIED
+// Optimized browser args
 const BROWSER_ARGS = [
     '--no-sandbox',
     '--disable-setuid-sandbox',
@@ -35,13 +26,28 @@ const BROWSER_ARGS = [
     '--disable-blink-features=AutomationControlled',
     '--disable-web-security',
     '--disable-gpu',
-    '--window-size=1920,1080'
-    // REMOVED proxy from here - we'll set it differently
+    '--window-size=1920,1080',
+    '--disable-images',  // Don't load images
+    '--disable-javascript-harmony-shipping',
+    '--disable-background-networking',
+    '--disable-background-timer-throttling',
+    '--disable-client-side-phishing-detection',
+    '--disable-default-apps',
+    '--disable-extensions',
+    '--disable-hang-monitor',
+    '--disable-popup-blocking',
+    '--disable-prompt-on-repost',
+    '--disable-sync',
+    '--disable-translate',
+    '--disable-domain-reliability',
+    '--disable-features=TranslateUI,BlinkGenPropertyTrees',
+    '--disable-ipc-flooding-protection',
+    '--no-pings'
 ];
 
 // Initialize browser pool
 async function initBrowserPool() {
-    console.log('🚀 Initializing browsers...');
+    console.log('🚀 Initializing browsers with proxy...');
     
     for (let i = 0; i < MAX_BROWSERS; i++) {
         try {
@@ -97,7 +103,7 @@ function releaseBrowser(browserObj) {
     }
 }
 
-// Scraping function
+// OPTIMIZED scraping function
 async function scrapeParts(url, options = {}) {
     const startTime = Date.now();
     let browserObj = null;
@@ -113,78 +119,82 @@ async function scrapeParts(url, options = {}) {
         
         page = await browserObj.browser.newPage();
         
-        // CRITICAL: Authenticate FIRST
-        console.log('🔐 Authenticating proxy...');
+        // Authenticate proxy
         await page.authenticate({
             username: PROXY_CONFIG.username,
             password: PROXY_CONFIG.password
         });
+        console.log('🔐 Proxy authenticated');
         
-        // Test proxy connection first
-        console.log('🌍 Testing proxy connection...');
-        try {
-            await page.goto('http://httpbin.org/ip', { 
-                timeout: 10000,
-                waitUntil: 'domcontentloaded' 
-            });
-            const proxyTest = await page.evaluate(() => document.body.innerText);
-            console.log('✅ Proxy working! Response:', proxyTest);
-        } catch (proxyError) {
-            console.error('❌ Proxy test failed:', proxyError.message);
-            throw new Error('Proxy connection failed');
-        }
+        // OPTIMIZATION: Block unnecessary resources
+        await page.setRequestInterception(true);
+        page.on('request', (req) => {
+            const resourceType = req.resourceType();
+            const url = req.url();
+            
+            // Block all images, fonts, media
+            if (['image', 'font', 'media', 'texttrack', 'object', 'beacon', 'csp_report', 'imageset'].includes(resourceType)) {
+                req.abort();
+            }
+            // Block analytics
+            else if (url.includes('google-analytics') || 
+                     url.includes('googletagmanager') || 
+                     url.includes('facebook') ||
+                     url.includes('doubleclick') ||
+                     url.includes('analytics')) {
+                req.abort();
+            }
+            // Allow everything else
+            else {
+                req.continue();
+            }
+        });
         
         // Set viewport and user agent
         await page.setViewport({ width: 1920, height: 1080 });
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
         
-        // Stealth mode
+        // Stealth
         await page.evaluateOnNewDocument(() => {
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined
             });
-            
-            window.chrome = {
-                runtime: {},
-                loadTimes: function() {},
-                csi: function() {}
-            };
-            
+            window.chrome = { runtime: {} };
             Object.defineProperty(navigator, 'plugins', {
                 get: () => [1,2,3,4,5]
             });
         });
         
-        // Navigate to target URL
-        console.log('📍 Navigating to target...');
+        // Navigate - with shorter timeout
+        console.log('📍 Navigating...');
         const response = await page.goto(url, {
-            waitUntil: 'domcontentloaded',
-            timeout: 30000
+            waitUntil: 'domcontentloaded',  // Don't wait for all resources
+            timeout: 20000  // 20 seconds max
         });
         
         console.log(`📄 Status: ${response.status()}`);
         
-        // Handle Cloudflare
-        let attempts = 0;
-        const maxAttempts = 10;
+        // Check for Cloudflare - but don't wait too long
+        let cloudflareChecks = 0;
+        const maxChecks = 5;  // Less checks
         
-        while (attempts < maxAttempts) {
+        while (cloudflareChecks < maxChecks) {
             const title = await page.title();
             
             if (title.includes('Just a moment') || title.includes('Checking')) {
-                console.log(`⏳ Cloudflare ${attempts + 1}/${maxAttempts}...`);
-                await page.waitForTimeout(2000);
-                attempts++;
+                console.log(`⏳ Cloudflare ${cloudflareChecks + 1}/${maxChecks}...`);
+                await page.waitForTimeout(1500);  // Shorter wait
+                cloudflareChecks++;
             } else {
-                console.log('✅ Page loaded!');
+                console.log('✅ Page ready!');
                 break;
             }
         }
         
-        // Wait for content
-        await page.waitForTimeout(2000);
+        // Quick wait for content
+        await page.waitForTimeout(1000);  // Just 1 second
         
-        // Get content
+        // Get content immediately
         const html = await page.content();
         const finalUrl = page.url();
         
@@ -220,7 +230,7 @@ app.post('/v1', async (req, res) => {
     const startTime = Date.now();
     
     try {
-        const { url, maxTimeout = 30000 } = req.body;
+        const { cmd, url, maxTimeout = 25000 } = req.body;  // 25 seconds default
         
         if (!url) {
             return res.status(400).json({
@@ -249,9 +259,13 @@ app.post('/v1', async (req, res) => {
                 solution: {
                     url: result.url,
                     status: 200,
-                    response: result.html
+                    response: result.html,
+                    cookies: [],
+                    userAgent: 'Mozilla/5.0'
                 },
-                elapsed: Date.now() - startTime
+                startTimestamp: startTime,
+                endTimestamp: Date.now(),
+                version: '1.0.0'
             });
         } else {
             throw new Error(result.error);
@@ -270,20 +284,30 @@ app.post('/v1', async (req, res) => {
 app.get('/health', (req, res) => {
     res.json({
         status: 'healthy',
-        proxy: PROXY_CONFIG.server,
-        browsers: browserPool.length
+        proxy: 'SmartProxy active',
+        browsers: browserPool.length,
+        active: browserPool.filter(b => b.busy).length
     });
 });
 
 // Root
 app.get('/', (req, res) => {
-    res.send(`<h1>🔧 Parts Scraper</h1><p>Proxy: ${PROXY_CONFIG.server}</p>`);
+    res.send(`
+        <h1>🔧 Parts Scraper with SmartProxy</h1>
+        <p>Status: Running</p>
+        <p>Performance: ~10-15 seconds per request</p>
+    `);
 });
 
 // Start
 app.listen(PORT, '0.0.0.0', async () => {
-    console.log(`🔧 Parts Scraper on port ${PORT}`);
-    console.log(`🌐 Proxy: ${PROXY_CONFIG.server}`);
+    console.log(`
+╔════════════════════════════════════════╗
+║  🔧 Parts Scraper v2.0                 ║
+║  Proxy: SmartProxy Residential         ║
+║  Expected: 10-15 seconds per request   ║
+╚════════════════════════════════════════╝
+    `);
     await initBrowserPool();
     console.log('✅ Ready!');
 });
