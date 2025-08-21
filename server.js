@@ -6,44 +6,51 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
 
-// SmartProxy Configuration - YOUR EXACT SETTINGS
+// SmartProxy Configuration - TRY DIFFERENT ENDPOINTS
 const PROXY_CONFIG = {
-    server: 'eu.smartproxy.com:3120',  // EU endpoint with Israel IP
-    username: process.env.PROXY_USERNAME || 'smart-byparr_area-IL_city-TELAVIV',
+    // Option 1: Residential Rotating (נסה את זה קודם!)
+    server: 'gate.smartproxy.com:10000',
+    
+    // Option 2: Static Residential (אם הראשון לא עובד)
+    // server: 'gate.smartproxy.com:7000',
+    
+    // Your credentials (without the smart- prefix for rotating)
+    username: process.env.PROXY_USERNAME || 'byparr',  // שים לב - בלי smart-
     password: process.env.PROXY_PASSWORD || '1209QWEasdzxcv'
 };
 
+// For static residential, use full username:
+// username: 'smart-byparr_area-IL_city-TELAVIV'
+
 // Browser pool
 const browserPool = [];
-const MAX_BROWSERS = 2;
+const MAX_BROWSERS = 1;  // Start with 1 for testing
 let initComplete = false;
 
-// Browser args WITH proxy
+// Browser args - SIMPLIFIED
 const BROWSER_ARGS = [
     '--no-sandbox',
     '--disable-setuid-sandbox',
     '--disable-dev-shm-usage',
     '--disable-blink-features=AutomationControlled',
     '--disable-web-security',
-    '--disable-features=IsolateOrigins,site-per-process',
     '--disable-gpu',
-    '--no-first-run',
-    '--window-size=1920,1080',
-    '--disable-background-timer-throttling',
-    '--disable-backgrounding-occluded-windows',
-    '--disable-renderer-backgrounding',
-    `--proxy-server=http://${PROXY_CONFIG.server}`  // SmartProxy server
+    '--window-size=1920,1080'
+    // REMOVED proxy from here - we'll set it differently
 ];
 
 // Initialize browser pool
 async function initBrowserPool() {
-    console.log('🚀 Initializing browsers with SmartProxy Israel IP...');
+    console.log('🚀 Initializing browsers...');
     
     for (let i = 0; i < MAX_BROWSERS; i++) {
         try {
             const browser = await puppeteer.launch({
                 headless: 'new',
-                args: BROWSER_ARGS,
+                args: [
+                    ...BROWSER_ARGS,
+                    `--proxy-server=http://${PROXY_CONFIG.server}`
+                ],
                 ignoreDefaultArgs: ['--enable-automation']
             });
             
@@ -53,7 +60,7 @@ async function initBrowserPool() {
                 lastUsed: Date.now() 
             });
             
-            console.log(`✅ Browser ${i + 1} ready with Israel proxy`);
+            console.log(`✅ Browser ${i + 1} ready`);
         } catch (error) {
             console.error(`❌ Failed to init browser ${i + 1}:`, error.message);
         }
@@ -90,14 +97,14 @@ function releaseBrowser(browserObj) {
     }
 }
 
-// Scraping with SmartProxy
+// Scraping function
 async function scrapeParts(url, options = {}) {
     const startTime = Date.now();
     let browserObj = null;
     let page = null;
     
     try {
-        console.log(`🇮🇱 Scraping via SmartProxy Israel: ${url.substring(0, 80)}...`);
+        console.log(`🔧 Scraping: ${url.substring(0, 80)}...`);
         
         browserObj = await getBrowser();
         if (!browserObj) {
@@ -106,21 +113,32 @@ async function scrapeParts(url, options = {}) {
         
         page = await browserObj.browser.newPage();
         
-        // CRITICAL: Authenticate with SmartProxy
+        // CRITICAL: Authenticate FIRST
+        console.log('🔐 Authenticating proxy...');
         await page.authenticate({
             username: PROXY_CONFIG.username,
             password: PROXY_CONFIG.password
         });
         
-        console.log('🔐 Proxy authenticated (Tel Aviv IP)');
+        // Test proxy connection first
+        console.log('🌍 Testing proxy connection...');
+        try {
+            await page.goto('http://httpbin.org/ip', { 
+                timeout: 10000,
+                waitUntil: 'domcontentloaded' 
+            });
+            const proxyTest = await page.evaluate(() => document.body.innerText);
+            console.log('✅ Proxy working! Response:', proxyTest);
+        } catch (proxyError) {
+            console.error('❌ Proxy test failed:', proxyError.message);
+            throw new Error('Proxy connection failed');
+        }
         
-        // Set viewport
+        // Set viewport and user agent
         await page.setViewport({ width: 1920, height: 1080 });
-        
-        // Set user agent
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
         
-        // Advanced stealth
+        // Stealth mode
         await page.evaluateOnNewDocument(() => {
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined
@@ -129,41 +147,16 @@ async function scrapeParts(url, options = {}) {
             window.chrome = {
                 runtime: {},
                 loadTimes: function() {},
-                csi: function() {},
-                app: {}
+                csi: function() {}
             };
             
             Object.defineProperty(navigator, 'plugins', {
                 get: () => [1,2,3,4,5]
             });
-            
-            Object.defineProperty(navigator, 'languages', {
-                get: () => ['he-IL', 'he', 'en-US', 'en']  // Israel languages
-            });
-            
-            // Set timezone to Israel
-            Object.defineProperty(Intl.DateTimeFormat.prototype, 'resolvedOptions', {
-                value: function() {
-                    return {
-                        timeZone: 'Asia/Jerusalem',
-                        locale: 'he-IL'
-                    };
-                }
-            });
         });
         
-        // Set headers
-        await page.setExtraHTTPHeaders({
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7',  // Israel locale
-            'Accept-Encoding': 'gzip, deflate, br',
-            'DNT': '1',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1'
-        });
-        
-        // Navigate
-        console.log('📍 Navigating with Tel Aviv IP...');
+        // Navigate to target URL
+        console.log('📍 Navigating to target...');
         const response = await page.goto(url, {
             waitUntil: 'domcontentloaded',
             timeout: 30000
@@ -171,43 +164,19 @@ async function scrapeParts(url, options = {}) {
         
         console.log(`📄 Status: ${response.status()}`);
         
-        // Debug IP if needed
-        if (response.status() === 403 || response.status() === 404) {
-            console.log('⚠️ Got error status, checking proxy IP...');
-            try {
-                const testPage = await browserObj.browser.newPage();
-                await testPage.authenticate({
-                    username: PROXY_CONFIG.username,
-                    password: PROXY_CONFIG.password
-                });
-                await testPage.goto('http://ipinfo.io/json', { timeout: 10000 });
-                const ipInfo = await testPage.evaluate(() => document.body.innerText);
-                console.log('🌍 Current IP info:', ipInfo);
-                await testPage.close();
-            } catch (e) {
-                console.log('Could not check IP:', e.message);
-            }
-        }
-        
-        // Check for Cloudflare
+        // Handle Cloudflare
         let attempts = 0;
-        const maxAttempts = 8;  // Faster with proxy
+        const maxAttempts = 10;
         
         while (attempts < maxAttempts) {
             const title = await page.title();
             
             if (title.includes('Just a moment') || title.includes('Checking')) {
-                console.log(`⏳ Cloudflare check ${attempts + 1}/${maxAttempts}...`);
-                await page.waitForTimeout(1500);
+                console.log(`⏳ Cloudflare ${attempts + 1}/${maxAttempts}...`);
+                await page.waitForTimeout(2000);
                 attempts++;
-                
-                const currentUrl = page.url();
-                if (currentUrl.includes('/parts') && currentUrl.includes('gid=')) {
-                    console.log('✅ Redirected to parts page!');
-                    break;
-                }
             } else {
-                console.log('✅ Page loaded successfully!');
+                console.log('✅ Page loaded!');
                 break;
             }
         }
@@ -215,20 +184,9 @@ async function scrapeParts(url, options = {}) {
         // Wait for content
         await page.waitForTimeout(2000);
         
-        // Try to wait for parts table
-        try {
-            await page.waitForSelector('table, .part-row, [data-part]', { 
-                timeout: 3000 
-            });
-            console.log('✅ Parts table found');
-        } catch (e) {
-            console.log('⚠️ No parts selector found');
-        }
-        
         // Get content
         const html = await page.content();
         const finalUrl = page.url();
-        const cookies = await page.cookies();
         
         const elapsed = Date.now() - startTime;
         console.log(`✅ Completed in ${elapsed}ms`);
@@ -237,7 +195,6 @@ async function scrapeParts(url, options = {}) {
             success: true,
             html: html,
             url: finalUrl,
-            cookies: cookies,
             elapsed: elapsed
         };
         
@@ -263,7 +220,7 @@ app.post('/v1', async (req, res) => {
     const startTime = Date.now();
     
     try {
-        const { cmd, url, maxTimeout = 30000 } = req.body;
+        const { url, maxTimeout = 30000 } = req.body;
         
         if (!url) {
             return res.status(400).json({
@@ -273,8 +230,7 @@ app.post('/v1', async (req, res) => {
         }
         
         console.log(`\n${'='.repeat(60)}`);
-        console.log(`🇮🇱 SmartProxy Israel Request`);
-        console.log(`🔗 URL: ${url.substring(0, 100)}...`);
+        console.log(`🔧 Request: ${url.substring(0, 100)}...`);
         console.log(`${'='.repeat(60)}\n`);
         
         const result = await Promise.race([
@@ -293,12 +249,9 @@ app.post('/v1', async (req, res) => {
                 solution: {
                     url: result.url,
                     status: 200,
-                    response: result.html,
-                    cookies: result.cookies || []
+                    response: result.html
                 },
-                startTimestamp: startTime,
-                endTimestamp: Date.now(),
-                version: '1.0.0'
+                elapsed: Date.now() - startTime
             });
         } else {
             throw new Error(result.error);
@@ -317,33 +270,22 @@ app.post('/v1', async (req, res) => {
 app.get('/health', (req, res) => {
     res.json({
         status: 'healthy',
-        proxy: 'SmartProxy Israel (Tel Aviv)',
-        browsers: browserPool.length,
-        active: browserPool.filter(b => b.busy).length
+        proxy: PROXY_CONFIG.server,
+        browsers: browserPool.length
     });
 });
 
 // Root
 app.get('/', (req, res) => {
-    res.send(`
-        <h1>🔧 Parts Scraper with SmartProxy</h1>
-        <p>Status: Ready</p>
-        <p>Proxy: SmartProxy Static Residential</p>
-        <p>Location: Tel Aviv, Israel</p>
-    `);
+    res.send(`<h1>🔧 Parts Scraper</h1><p>Proxy: ${PROXY_CONFIG.server}</p>`);
 });
 
 // Start
 app.listen(PORT, '0.0.0.0', async () => {
-    console.log(`
-╔════════════════════════════════════════╗
-║  🔧 Parts Scraper with SmartProxy IL   ║
-║  Port: ${PORT}                            ║
-║  Location: Tel Aviv, Israel            ║
-╚════════════════════════════════════════╝
-    `);
+    console.log(`🔧 Parts Scraper on port ${PORT}`);
+    console.log(`🌐 Proxy: ${PROXY_CONFIG.server}`);
     await initBrowserPool();
-    console.log('✅ Ready with Israel proxy!');
+    console.log('✅ Ready!');
 });
 
 // Cleanup
