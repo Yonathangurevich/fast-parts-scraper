@@ -6,18 +6,20 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 8080;
 
-// SmartProxy STATIC RESIDENTIAL Configuration (YOUR EXACT SETTINGS!)
-const PROXY_CONFIG = {
-    server: 'eu.smartproxy.com',  // EU server
-    port: '3120',                  // Static residential port
-    username: process.env.PROXY_USERNAME || 'smart-byparr_area-IL_city-TELAVIV',  // Full username with smart-
-    password: process.env.PROXY_PASSWORD || '1209QWEasdzxcv'
-};
+// User agents pool - rotate between them
+const USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+];
 
-// Build proxy URL
-const PROXY_URL = `http://${PROXY_CONFIG.server}:${PROXY_CONFIG.port}`;
+// Get random user agent
+function getRandomUserAgent() {
+    return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+}
 
-// Browser args
+// Browser args - optimized for cloud
 const BROWSER_ARGS = [
     '--no-sandbox',
     '--disable-setuid-sandbox',
@@ -25,124 +27,191 @@ const BROWSER_ARGS = [
     '--disable-blink-features=AutomationControlled',
     '--disable-web-security',
     '--disable-gpu',
+    '--no-first-run',
+    '--no-zygote',
+    '--deterministic-fetch',
+    '--disable-features=IsolateOrigins,site-per-process',
     '--window-size=1920,1080',
-    '--disable-images',
-    '--disable-background-timer-throttling',
-    '--disable-backgrounding-occluded-windows',
-    '--disable-renderer-backgrounding',
-    '--disable-features=TranslateUI',
-    '--disable-ipc-flooding-protection'
+    '--start-maximized'
 ];
 
-// Main scraping function
+// Main scraping function - NO PROXY
 async function scrapeParts(url, options = {}) {
     const startTime = Date.now();
     let browser = null;
     let page = null;
     
     try {
-        console.log(`🔧 Scraping via SmartProxy Static Residential...`);
-        console.log(`🌐 Proxy: ${PROXY_URL}`);
-        console.log(`👤 User: ${PROXY_CONFIG.username}`);
+        console.log(`🔧 Scraping directly (no proxy)...`);
         
-        // Launch browser with proxy
+        // Launch browser
         browser = await puppeteer.launch({
             headless: 'new',
-            args: [
-                ...BROWSER_ARGS,
-                `--proxy-server=${PROXY_URL}`  // Just the server URL
-            ],
+            args: BROWSER_ARGS,
             ignoreDefaultArgs: ['--enable-automation']
         });
         
-        page = await browser.newPage();
+        // Create incognito context
+        const context = await browser.createIncognitoBrowserContext();
+        page = await context.newPage();
         
-        // CRITICAL: Authenticate with FULL credentials
-        console.log('🔐 Authenticating...');
-        await page.authenticate({
-            username: PROXY_CONFIG.username,  // smart-byparr_area-IL_city-TELAVIV
-            password: PROXY_CONFIG.password   // 1209QWEasdzxcv
+        // Random user agent
+        const userAgent = getRandomUserAgent();
+        await page.setUserAgent(userAgent);
+        console.log('🎭 User Agent:', userAgent.substring(0, 50) + '...');
+        
+        // Set viewport
+        await page.setViewport({ 
+            width: 1920, 
+            height: 1080,
+            deviceScaleFactor: 1,
+            isMobile: false,
+            hasTouch: false
         });
         
-        // Test proxy first
-        console.log('🧪 Testing proxy connection...');
-        try {
-            await page.goto('http://ipinfo.io/json', { 
-                timeout: 10000,
-                waitUntil: 'domcontentloaded' 
+        // ADVANCED Anti-detection
+        await page.evaluateOnNewDocument(() => {
+            // Override webdriver
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
             });
-            const ipInfo = await page.evaluate(() => document.body.innerText);
-            const ipData = JSON.parse(ipInfo);
-            console.log('✅ Proxy working! Location:', ipData.city, ipData.country);
-            console.log('📍 IP:', ipData.ip);
-        } catch (proxyError) {
-            console.error('❌ Proxy test failed:', proxyError.message);
-            // Continue anyway - sometimes ipinfo blocks proxies
-        }
+            
+            // Add chrome object
+            window.chrome = {
+                runtime: {},
+                loadTimes: function() {},
+                csi: function() {},
+                app: {
+                    isInstalled: false,
+                    InstallState: {
+                        DISABLED: 'disabled',
+                        INSTALLED: 'installed',
+                        NOT_INSTALLED: 'not_installed'
+                    }
+                }
+            };
+            
+            // Override permissions
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+            );
+            
+            // Mock plugins
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [
+                    {
+                        0: {type: "application/x-google-chrome-pdf", suffixes: "pdf"},
+                        1: {type: "application/pdf", suffixes: "pdf"},
+                        description: "Portable Document Format",
+                        filename: "internal-pdf-viewer",
+                        length: 2,
+                        name: "Chrome PDF Plugin"
+                    },
+                    {
+                        0: {type: "application/x-nacl", suffixes: ""},
+                        1: {type: "application/x-pnacl", suffixes: ""},
+                        description: "Native Client Executable",
+                        filename: "internal-nacl-plugin",
+                        length: 2,
+                        name: "Native Client"
+                    }
+                ]
+            });
+            
+            // Override languages
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en']
+            });
+            
+            // Override hardware concurrency
+            Object.defineProperty(navigator, 'hardwareConcurrency', {
+                get: () => 8
+            });
+            
+            // Override device memory
+            Object.defineProperty(navigator, 'deviceMemory', {
+                get: () => 8
+            });
+        });
         
-        // Set viewport and user agent
-        await page.setViewport({ width: 1920, height: 1080 });
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        // Set headers
+        await page.setExtraHTTPHeaders({
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0'
+        });
         
-        // Block unnecessary resources
+        // Block only heavy resources
         await page.setRequestInterception(true);
         page.on('request', (req) => {
             const resourceType = req.resourceType();
-            if (['image', 'font', 'media', 'stylesheet'].includes(resourceType)) {
+            // Only block images and media, keep CSS and fonts
+            if (['image', 'media'].includes(resourceType)) {
                 req.abort();
             } else {
                 req.continue();
             }
         });
         
-        // Anti-detection
-        await page.evaluateOnNewDocument(() => {
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-            
-            window.chrome = {
-                runtime: {},
-                loadTimes: function() {},
-                csi: function() {}
-            };
-            
-            Object.defineProperty(navigator, 'plugins', {
-                get: () => [1,2,3,4,5]
-            });
-            
-            Object.defineProperty(navigator, 'languages', {
-                get: () => ['he-IL', 'he', 'en-US', 'en']  // Israel locale
-            });
-        });
+        // Navigate with retries
+        console.log('📍 Navigating...');
+        let response;
+        let retries = 0;
+        const maxRetries = 2;
         
-        // Navigate to target
-        console.log('📍 Navigating to target...');
-        const response = await page.goto(url, {
-            waitUntil: 'domcontentloaded',
-            timeout: 30000
-        });
-        
-        console.log(`📄 Status: ${response.status()}`);
-        
-        // If 407, auth failed
-        if (response.status() === 407) {
-            console.error('❌ Proxy authentication failed!');
-            const content = await page.content();
-            console.log('Error page:', content.substring(0, 500));
+        while (retries <= maxRetries) {
+            try {
+                response = await page.goto(url, {
+                    waitUntil: 'domcontentloaded',
+                    timeout: 25000
+                });
+                
+                console.log(`📄 Status: ${response.status()}`);
+                
+                if (response.status() === 403) {
+                    console.log(`⚠️ Got 403, retry ${retries + 1}/${maxRetries}...`);
+                    retries++;
+                    await page.waitForTimeout(2000);
+                } else {
+                    break;
+                }
+            } catch (navError) {
+                console.log(`⚠️ Navigation error, retry ${retries + 1}/${maxRetries}...`);
+                retries++;
+                if (retries > maxRetries) throw navError;
+                await page.waitForTimeout(2000);
+            }
         }
         
         // Handle Cloudflare
         let attempts = 0;
-        const maxAttempts = 10;
+        const maxAttempts = 12;
         
         while (attempts < maxAttempts) {
             const title = await page.title();
             
             if (title.includes('Just a moment') || title.includes('Checking')) {
                 console.log(`⏳ Cloudflare check ${attempts + 1}/${maxAttempts}...`);
-                await page.waitForTimeout(2000);
+                await page.waitForTimeout(2500); // Longer wait
                 attempts++;
+                
+                // Check if redirected
+                const currentUrl = page.url();
+                if (currentUrl !== url && currentUrl.includes('gid=')) {
+                    console.log('✅ Redirected successfully!');
+                    break;
+                }
             } else {
                 console.log('✅ Page loaded!');
                 break;
@@ -152,10 +221,23 @@ async function scrapeParts(url, options = {}) {
         // Wait for content
         await page.waitForTimeout(2000);
         
+        // Try to wait for parts table
+        try {
+            await page.waitForSelector('table, .part-row, .parts-list', { 
+                timeout: 3000 
+            });
+            console.log('✅ Parts content found');
+        } catch (e) {
+            console.log('⚠️ Parts selector not found, continuing...');
+        }
+        
         // Get content
         const html = await page.content();
         const finalUrl = page.url();
         const cookies = await page.cookies();
+        
+        // Close context
+        await context.close();
         
         const elapsed = Date.now() - startTime;
         console.log(`✅ Completed in ${elapsed}ms`);
@@ -176,70 +258,16 @@ async function scrapeParts(url, options = {}) {
         };
         
     } finally {
-        if (page) await page.close().catch(() => {});
         if (browser) await browser.close().catch(() => {});
     }
 }
-
-// Test proxy endpoint
-app.get('/test-proxy', async (req, res) => {
-    console.log('🧪 Testing SmartProxy connection...');
-    
-    let browser = null;
-    let page = null;
-    
-    try {
-        browser = await puppeteer.launch({
-            headless: 'new',
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                `--proxy-server=${PROXY_URL}`
-            ]
-        });
-        
-        page = await browser.newPage();
-        
-        await page.authenticate({
-            username: PROXY_CONFIG.username,
-            password: PROXY_CONFIG.password
-        });
-        
-        await page.goto('http://ipinfo.io/json', { timeout: 15000 });
-        const ipInfo = await page.evaluate(() => JSON.parse(document.body.innerText));
-        
-        console.log('✅ Proxy test successful:', ipInfo);
-        res.json({
-            success: true,
-            proxy: {
-                server: `${PROXY_CONFIG.server}:${PROXY_CONFIG.port}`,
-                username: PROXY_CONFIG.username,
-                location: ipInfo
-            }
-        });
-        
-    } catch (error) {
-        console.error('❌ Proxy test failed:', error.message);
-        res.json({
-            success: false,
-            error: error.message,
-            config: {
-                server: `${PROXY_CONFIG.server}:${PROXY_CONFIG.port}`,
-                username: PROXY_CONFIG.username
-            }
-        });
-    } finally {
-        if (page) await page.close();
-        if (browser) await browser.close();
-    }
-});
 
 // Main endpoint
 app.post('/v1', async (req, res) => {
     const startTime = Date.now();
     
     try {
-        const { cmd, url, maxTimeout = 30000 } = req.body;
+        const { cmd, url, maxTimeout = 35000 } = req.body;
         
         if (!url) {
             return res.status(400).json({
@@ -250,6 +278,7 @@ app.post('/v1', async (req, res) => {
         
         console.log(`\n${'='.repeat(60)}`);
         console.log(`🔧 Request: ${url.substring(0, 100)}...`);
+        console.log(`📡 Method: Direct (no proxy)`);
         console.log(`${'='.repeat(60)}\n`);
         
         const result = await Promise.race([
@@ -293,23 +322,16 @@ app.post('/v1', async (req, res) => {
 app.get('/health', (req, res) => {
     res.json({
         status: 'healthy',
-        proxy: {
-            type: 'SmartProxy Static Residential',
-            server: `${PROXY_CONFIG.server}:${PROXY_CONFIG.port}`,
-            location: 'Tel Aviv, Israel'
-        }
+        method: 'Direct connection (no proxy)'
     });
 });
 
 // Root
 app.get('/', (req, res) => {
     res.send(`
-        <h1>🔧 Parts Scraper with SmartProxy</h1>
-        <p>Type: Static Residential</p>
-        <p>Server: ${PROXY_CONFIG.server}:${PROXY_CONFIG.port}</p>
-        <p>Location: Tel Aviv, Israel</p>
-        <hr>
-        <p><a href="/test-proxy">Test Proxy Connection</a></p>
+        <h1>🔧 Parts Scraper v3.0</h1>
+        <p>Method: Direct connection</p>
+        <p>Status: Running</p>
     `);
 });
 
@@ -317,17 +339,10 @@ app.get('/', (req, res) => {
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`
 ╔════════════════════════════════════════╗
-║  🔧 Parts Scraper v2.0                 ║
-║  Proxy: SmartProxy Static Residential  ║
-║  Server: ${PROXY_CONFIG.server}:${PROXY_CONFIG.port}        ║
-║  Location: Tel Aviv, Israel            ║
+║  🔧 Parts Scraper v3.0                 ║
+║  Method: Direct (no proxy)             ║
+║  Port: ${PORT}                            ║
 ╚════════════════════════════════════════╝
     `);
     console.log('✅ Ready!');
-});
-
-// Cleanup
-process.on('SIGTERM', async () => {
-    console.log('📛 Shutting down...');
-    process.exit(0);
 });
