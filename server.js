@@ -1,6 +1,5 @@
 const express = require('express');
 const puppeteer = require('puppeteer');
-const cheerio = require('cheerio');
 
 const app = express();
 app.use(express.json());
@@ -34,8 +33,7 @@ const BROWSER_ARGS = [
     '--disable-sync',
     '--disable-translate',
     '--metrics-recording-only',
-    '--mute-audio',
-    '--no-zygote'
+    '--mute-audio'
 ];
 
 // Initialize browser pool
@@ -138,14 +136,6 @@ async function scrapeParts(url, options = {}) {
             window.chrome = { runtime: {} };
             Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
             Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-            
-            // Override permissions
-            const originalQuery = window.navigator.permissions.query;
-            window.navigator.permissions.query = (parameters) => (
-                parameters.name === 'notifications' ?
-                    Promise.resolve({ state: Notification.permission }) :
-                    originalQuery(parameters)
-            );
         });
         
         // Set headers
@@ -204,22 +194,22 @@ async function scrapeParts(url, options = {}) {
         const finalUrl = page.url();
         const cookies = await page.cookies();
         
-        // Parse parts data with Cheerio for quick analysis
-        const $ = cheerio.load(html);
-        const partsCount = $('.part-number, .part-row, [data-part-number], tr[data-part]').length;
-        const hasPartsData = partsCount > 0 || html.includes('part_number') || html.includes('partNumber');
+        // Simple check for parts data
+        const hasPartsData = html.includes('part_number') || 
+                           html.includes('partNumber') ||
+                           html.includes('part-number') ||
+                           html.includes('GM_OP');
         
         const elapsed = Date.now() - startTime;
         
         console.log(`✅ Scraping completed in ${elapsed}ms`);
-        console.log(`📊 Found ${partsCount} parts in table`);
+        console.log(`📊 Has parts data: ${hasPartsData}`);
         
         return {
             success: true,
             html: html,
             url: finalUrl,
             cookies: cookies,
-            partsCount: partsCount,
             hasData: hasPartsData,
             elapsed: elapsed
         };
@@ -280,7 +270,6 @@ app.post('/v1', async (req, res) => {
             
             console.log(`\n${'='.repeat(60)}`);
             console.log(`✅ SUCCESS - Total time: ${totalElapsed}ms`);
-            console.log(`📊 Parts found: ${result.partsCount}`);
             console.log(`📄 HTML size: ${result.html.length} bytes`);
             console.log(`${'='.repeat(60)}\n`);
             
@@ -295,7 +284,6 @@ app.post('/v1', async (req, res) => {
                     userAgent: 'Mozilla/5.0'
                 },
                 metadata: {
-                    partsCount: result.partsCount,
                     hasData: result.hasData,
                     elapsed: totalElapsed
                 },
@@ -399,15 +387,3 @@ setInterval(async () => {
         }
     }
 }, 60000); // Check every minute
-```
-
----
-
-## 🔧 .env (Optional - for future proxy support)
-```env
-PORT=8080
-
-# Future proxy support (if needed)
-# PROXY_URL=http://proxy.example.com:8080
-# PROXY_USERNAME=username
-# PROXY_PASSWORD=password
